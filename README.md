@@ -1,5 +1,5 @@
-# Blink Example
+# HTTP Request Example
 
-Starts a FreeRTOS task to blink an LED
+Uses a POSIX socket to make a very simple HTTP request.
 
 See the README.md file in the upper level 'examples' directory for more information about examples.
