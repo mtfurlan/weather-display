@@ -15,7 +15,6 @@
 #include <esp_log.h>
 #include <nvs_flash.h>
 #include <esp_http_client.h>
-#include <protocol_examples_common.h>
 
 #include <lwip/err.h>
 #include <lwip/sockets.h>
@@ -23,15 +22,33 @@
 #include <lwip/netdb.h>
 #include <lwip/dns.h>
 
+#include <driver/gpio.h>
+
 #include <cJSON.h>
+#include "esp32_digital_led_lib.h"
 
 // defines OWP_API_KEY
 #include "secret.h"
+#include "wifi.h"
 
-/* Constants that aren't configurable in menuconfig */
 #define WEATHER_API_URL "https://openweathermap.org/data/2.5/weather?id=5007804&appid=" OWP_API_KEY
 
 #define TIMEZONE "EST+5EDT,M3.2.0/2,M11.1.0/2"
+
+#define HIGH 1
+#define LOW 0
+#define OUTPUT GPIO_MODE_OUTPUT
+#define INPUT GPIO_MODE_INPUT
+
+#define DEC 10
+#define HEX 16
+#define OCT 8
+#define BIN 2
+
+#define min(a, b)  ((a) < (b) ? (a) : (b))
+#define max(a, b)  ((a) > (b) ? (a) : (b))
+#define floor(a)   ((int)(a))
+#define ceil(a)    ((int)((int)(a) < (a) ? (a+1) : (a)))
 
 static const char *TAG = "example";
 
@@ -41,6 +58,80 @@ int weather_json_index = 0;
 bool weather_ready = false;
 bool weather_parsed = false;
 cJSON* weather;
+
+strand_t STRANDS[] = { // Avoid using any of the strapping pins on the ESP32
+  {.rmtChannel = 0, .gpioNum = 15, .ledType = LED_WS2812B_V3, .brightLimit = 32, .numPixels = 50,
+   .pixels = NULL, ._stateVars = NULL},
+};
+int STRANDCNT = sizeof(STRANDS)/sizeof(STRANDS[0]);
+
+uint32_t IRAM_ATTR millis()
+{
+  return xTaskGetTickCount() * portTICK_PERIOD_MS;
+}
+void delay(uint32_t ms)
+{
+    if (ms == 0) return;
+    vTaskDelay(ms / portTICK_PERIOD_MS);
+}
+void rainbow(strand_t * pStrand, unsigned long delay_ms, unsigned long timeout_ms)
+{
+  const uint8_t color_div = 4;
+  const uint8_t anim_step = 1;
+  const uint8_t anim_max = pStrand->brightLimit - anim_step;
+  pixelColor_t color1 = pixelFromRGB(anim_max, 0, 0);
+  pixelColor_t color2 = pixelFromRGB(anim_max, 0, 0);
+  uint8_t stepVal1 = 0;
+  uint8_t stepVal2 = 0;
+  bool runForever = (timeout_ms == 0 ? true : false);
+  unsigned long start_ms = millis();
+  while (runForever || (millis() - start_ms < timeout_ms)) {
+    color1 = color2;
+    stepVal1 = stepVal2;
+    for (uint16_t i = 0; i < pStrand->numPixels; i++) {
+      pStrand->pixels[i] = pixelFromRGB(color1.r/color_div, color1.g/color_div, color1.b/color_div);
+      if (i == 1) {
+        color2 = color1;
+        stepVal2 = stepVal1;
+      }
+      switch (stepVal1) {
+        case 0:
+        color1.g += anim_step;
+        if (color1.g >= anim_max)
+          stepVal1++;
+        break;
+        case 1:
+        color1.r -= anim_step;
+        if (color1.r == 0)
+          stepVal1++;
+        break;
+        case 2:
+        color1.b += anim_step;
+        if (color1.b >= anim_max)
+          stepVal1++;
+        break;
+        case 3:
+        color1.g -= anim_step;
+        if (color1.g == 0)
+          stepVal1++;
+        break;
+        case 4:
+        color1.r += anim_step;
+        if (color1.r >= anim_max)
+          stepVal1++;
+        break;
+        case 5:
+        color1.b -= anim_step;
+        if (color1.b == 0)
+          stepVal1 = 0;
+        break;
+      }
+    }
+    digitalLeds_updatePixels(pStrand);
+    delay(delay_ms);
+  }
+  digitalLeds_resetPixels(pStrand);
+}
 
 esp_err_t _http_event_handle(esp_http_client_event_t *evt)
 {
@@ -109,6 +200,22 @@ static void http_get_task(void *pvParameters)
         ESP_LOGI(TAG, "Starting again!");
     }
 }
+void led_task(void *pvParameters)
+{
+  gpio_set_direction(GPIO_NUM_15, GPIO_MODE_OUTPUT);
+  gpio_set_level(GPIO_NUM_15, LOW);
+  if (digitalLeds_initStrands(STRANDS, STRANDCNT)) {
+    ets_printf("Init FAILURE: halting\n");
+    while (true) {};
+  }
+  while (true) {
+    for (int i = 0; i < STRANDCNT; i++) {
+      strand_t * pStrand = &STRANDS[i];
+      rainbow(pStrand, 0, 2000);
+      digitalLeds_resetPixels(pStrand);
+    }
+  }
+}
 
 void app_main()
 {
@@ -116,17 +223,13 @@ void app_main()
     tcpip_adapter_init();
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
-
     setenv("TZ", TIMEZONE, 1);
     tzset();
 
-    /* This helper function configures Wi-Fi or Ethernet, as selected in menuconfig.
-     * Read "Establishing Wi-Fi or Ethernet Connection" section in
-     * examples/protocols/README.md for more information about this function.
-     */
-    ESP_ERROR_CHECK(example_connect());
+    ESP_ERROR_CHECK(wifi_connect());
 
     xTaskCreate(&http_get_task, "http_get_task", 4096, NULL, 5, NULL);
+    xTaskCreate(&led_task, "led_task", 4096, NULL, 10, NULL);
 
     char buf[64];
     while(1) {
@@ -169,7 +272,6 @@ void app_main()
             printf("temp: %.1f [%.1f - %.1f], %.2f%% humidity\n", temp->valuedouble, temp_min->valuedouble, temp_max->valuedouble, humidity->valuedouble);
             //got weather, time is +808927389-540028987-808466992 807416096:544104778:544565332 GM
             //    temp: 19.1 [16.1 - 21.0], 20.00% humidity
-
         }
         vTaskDelay(1);
     }

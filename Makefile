@@ -3,9 +3,7 @@
 # project subdirectory.
 #
 
-PROJECT_NAME := http-request
-
-EXTRA_COMPONENT_DIRS = $(IDF_PATH)/examples/common_components/protocol_examples_common
+PROJECT_NAME := weather-display
 
 include $(IDF_PATH)/make/project.mk
 
