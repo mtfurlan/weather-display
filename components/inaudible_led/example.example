@@ -1,0 +1,183 @@
+#include <stdint.h>
+#include <string.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/queue.h"
+#include "freertos/semphr.h"
+#include "nvs.h"
+#include "nvs_flash.h"
+#include "esp_system.h"
+#include "esp_log.h"
+#include "driver/rmt.h"
+#include "driver/gpio.h"
+
+#include "include/handles.h"
+#include "include/defines.h"
+#include "include/types.h"
+#include "include/LEDs.h"
+#include "include/analysis.h"
+#include "include/LEDs.h"
+
+
+TaskHandle_t LEDTaskHandle = NULL;
+TaskHandle_t AnalysisTaskHandle = NULL;
+
+QueueHandle_t rainbowDataBufferQueue = NULL;
+QueueHandle_t VUMeterDataBufferQueue = NULL;
+QueueHandle_t diffDataBufferQueue = NULL;
+QueueHandle_t phaseDataBufferQueue = NULL;
+QueueHandle_t LEDEmptyBufferQueue = NULL;
+QueueHandle_t freqDataQueue = NULL;
+QueueHandle_t audioDataQueue = NULL;
+
+SemaphoreHandle_t audioDataSemaphore = NULL;
+
+
+DRAM_ATTR pixel LEDData1[NUMLEDS] = {0};
+DRAM_ATTR pixel LEDData2[NUMLEDS] = {0};
+DRAM_ATTR pixel LEDData3[NUMLEDS] = {0};
+DRAM_ATTR pixel LEDData4[NUMLEDS] = {0};
+DRAM_ATTR pixel LEDData5[NUMLEDS] = {0};
+DRAM_ATTR pixel LEDData6[NUMLEDS] = {0};
+DRAM_ATTR pixel LEDData7[NUMLEDS] = {0};
+DRAM_ATTR pixel LEDData8[NUMLEDS] = {0};
+
+void StatsTask(void *ignored)
+{
+	static const char *TAG = "STATS!!!!!!!!!!!!!!!!!!!!!!!!!!!!!";
+	static char buf[10000];
+	for (;;)
+	{
+		vTaskDelay(50000 / portTICK_PERIOD_MS);
+		vTaskGetRunTimeStats(buf);
+		ESP_LOGE(TAG, "%s", buf); }
+	vTaskDelete(NULL);
+}
+
+void example_app_main(void)
+{
+static const char *TAG = "app_main";
+
+init_bluetooth();
+
+/******************************************************************
+ ******************************************************************
+ ******************************************************************
+ ******************************************************************
+ ******************************************************************/
+
+	esp_reset_reason_t reason = esp_reset_reason();
+	pixel resetPx = {0,0,0};
+	HSVpixel hsv = {0.0f,1.0f,0.125f};
+	pixel *data1p = LEDData1;
+	pixel *data2p = LEDData2;
+	pixel *data3p = LEDData3;
+	pixel *data4p = LEDData4;
+	pixel *data5p = LEDData5;
+	pixel *data6p = LEDData6;
+	pixel *data7p = LEDData7;
+	pixel *data8p = LEDData8;
+
+	gpio_config_t io_conf;
+	io_conf.intr_type = GPIO_PIN_INTR_DISABLE;
+	io_conf.mode = GPIO_MODE_OUTPUT;
+	io_conf.pin_bit_mask = 1 << 13;
+	io_conf.pull_down_en = 0;
+	io_conf.pull_up_en = 0;
+	gpio_config(&io_conf);
+	gpio_set_level(13,1);
+
+ESP_LOGV(TAG, "Reset reason: %d", reason);
+	switch (reason)
+	{
+		case ESP_RST_UNKNOWN:
+			break;
+
+		case ESP_RST_POWERON:
+			hsv.hue = 120.0f;
+			break;
+
+		case ESP_RST_EXT:
+			hsv.hue = 240.0f;
+			break;
+
+		case ESP_RST_SW:
+			hsv.hue = 90.0f;
+			break;
+
+		case ESP_RST_PANIC:
+			hsv.hue = 300.0f;
+			break;
+
+		case ESP_RST_INT_WDT:
+		case ESP_RST_TASK_WDT:
+		case ESP_RST_WDT:
+			hsv.hue = 30.0f;
+			break;
+
+		case ESP_RST_DEEPSLEEP:
+			hsv.hue = 300.0f;
+			hsv.value = 0.125f;
+			break;
+
+		case ESP_RST_BROWNOUT:
+			hsv.hue = 30.0f;
+			hsv.value = 0.0625f;
+			break;
+
+		case ESP_RST_SDIO:
+			hsv.hue = 180.0f;
+			break;
+
+		default:
+			hsv.saturation = 0.0f;
+			break;
+	}
+
+	HSVtoRGB(&hsv, &resetPx);
+
+	for( int i = 0 ; i < NUMLEDS ; i++ )
+	{
+		LEDData1[i] = resetPx;
+		LEDData2[i] = resetPx;
+		LEDData3[i] = resetPx;
+		LEDData4[i] = resetPx;
+	}
+
+	audioDataSemaphore = xSemaphoreCreateBinary();
+	rainbowDataBufferQueue = xQueueCreate(2, sizeof(pixel*));
+	VUMeterDataBufferQueue = xQueueCreate(2, sizeof(pixel*));
+	diffDataBufferQueue = xQueueCreate(2, sizeof(pixel*));
+	phaseDataBufferQueue = xQueueCreate(2, sizeof(pixel*));
+	LEDEmptyBufferQueue = xQueueCreate(8, sizeof(pixel*));
+	freqDataQueue = xQueueCreate(2, sizeof(float*));
+
+	if (LEDTYPE1 == NEOPIXEL)	rmt_init(RAINBOW_CHANNEL, RAINBOW_PIN);
+	if (LEDTYPE2 == NEOPIXEL)	rmt_init(VUMETER_CHANNEL, VUMETER_PIN);
+	if (LEDTYPE3 == NEOPIXEL)	rmt_init(DIFF_CHANNEL, DIFF_PIN);
+	if (LEDTYPE4 == NEOPIXEL)	rmt_init(PHASE_CHANNEL, PHASE_PIN);
+
+//	xTaskCreate(TestTask, "Test Task", 2000, NULL, TESTPRIORITY, &TestTaskHandle);
+
+	//xTaskCreatePinnedToCore(LEDTask, "LEDTask", 2000, NULL, LEDPRIORITY, &LEDTaskHandle, 1); //1 is APP CPU ?
+	xTaskCreatePinnedToCore(LEDTask, "LEDTask", 2000, NULL, LEDPRIORITY, &LEDTaskHandle, 1);
+
+	//xTaskCreatePinnedToCore(AnalysisTask, "AnalysisTask", 2000, NULL, ANALYSISPRIORITY, &AnalysisTaskHandle, 1);
+	xTaskCreatePinnedToCore(AnalysisTask, "AnalysisTask", 4000, NULL, ANALYSISPRIORITY, &AnalysisTaskHandle, 1);
+
+
+ESP_LOGV(TAG, "Data Queue spaces available: %d",uxQueueSpacesAvailable(rainbowDataBufferQueue));
+ESP_LOGV(TAG, "data1p: %p", data1p);
+ESP_LOGV(TAG, "&data1p: %p", &data1p);
+
+	ESP_ERROR_CHECK(!xQueueSendToBack(rainbowDataBufferQueue, &data1p, portMAX_DELAY));
+	ESP_ERROR_CHECK(!xQueueSendToBack(VUMeterDataBufferQueue, &data2p, portMAX_DELAY));
+	ESP_ERROR_CHECK(!xQueueSendToBack(diffDataBufferQueue, &data3p, portMAX_DELAY));
+	ESP_ERROR_CHECK(!xQueueSendToBack(phaseDataBufferQueue, &data4p, portMAX_DELAY));
+	ESP_ERROR_CHECK(!xQueueSendToBack(LEDEmptyBufferQueue, &data5p, portMAX_DELAY));
+	ESP_ERROR_CHECK(!xQueueSendToBack(LEDEmptyBufferQueue, &data6p, portMAX_DELAY));
+	ESP_ERROR_CHECK(!xQueueSendToBack(LEDEmptyBufferQueue, &data7p, portMAX_DELAY));
+	ESP_ERROR_CHECK(!xQueueSendToBack(LEDEmptyBufferQueue, &data8p, portMAX_DELAY));
+ESP_LOGV(TAG, "Data Queue spaces available: %d",uxQueueSpacesAvailable(rainbowDataBufferQueue));
+ESP_LOGV(TAG,"uxQueueSpacesAvailable for LEDEmptyBufferQueue: %d", uxQueueSpacesAvailable(LEDEmptyBufferQueue));
+}

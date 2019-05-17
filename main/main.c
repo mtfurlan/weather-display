@@ -25,7 +25,11 @@
 #include <driver/gpio.h>
 
 #include <cJSON.h>
-#include "esp32_digital_led_lib.h"
+
+#include "driver/rmt.h"
+#include "LEDs.h"
+#include "analysis.h"
+#include "../components/inaudible_led/include/types.h"
 
 // defines OWP_API_KEY
 #include "secret.h"
@@ -34,21 +38,6 @@
 #define WEATHER_API_URL "https://openweathermap.org/data/2.5/weather?id=5007804&appid=" OWP_API_KEY
 
 #define TIMEZONE "EST+5EDT,M3.2.0/2,M11.1.0/2"
-
-#define HIGH 1
-#define LOW 0
-#define OUTPUT GPIO_MODE_OUTPUT
-#define INPUT GPIO_MODE_INPUT
-
-#define DEC 10
-#define HEX 16
-#define OCT 8
-#define BIN 2
-
-#define min(a, b)  ((a) < (b) ? (a) : (b))
-#define max(a, b)  ((a) > (b) ? (a) : (b))
-#define floor(a)   ((int)(a))
-#define ceil(a)    ((int)((int)(a) < (a) ? (a+1) : (a)))
 
 static const char *TAG = "example";
 
@@ -59,12 +48,6 @@ bool weather_ready = false;
 bool weather_parsed = false;
 cJSON* weather;
 
-strand_t STRANDS[] = { // Avoid using any of the strapping pins on the ESP32
-  {.rmtChannel = 0, .gpioNum = 15, .ledType = LED_WS2812B_V3, .brightLimit = 32, .numPixels = 50,
-   .pixels = NULL, ._stateVars = NULL},
-};
-int STRANDCNT = sizeof(STRANDS)/sizeof(STRANDS[0]);
-
 uint32_t IRAM_ATTR millis()
 {
   return xTaskGetTickCount() * portTICK_PERIOD_MS;
@@ -74,65 +57,6 @@ void delay(uint32_t ms)
     if (ms == 0) return;
     vTaskDelay(ms / portTICK_PERIOD_MS);
 }
-void rainbow(strand_t * pStrand, unsigned long delay_ms, unsigned long timeout_ms)
-{
-  const uint8_t color_div = 4;
-  const uint8_t anim_step = 1;
-  const uint8_t anim_max = pStrand->brightLimit - anim_step;
-  pixelColor_t color1 = pixelFromRGB(anim_max, 0, 0);
-  pixelColor_t color2 = pixelFromRGB(anim_max, 0, 0);
-  uint8_t stepVal1 = 0;
-  uint8_t stepVal2 = 0;
-  bool runForever = (timeout_ms == 0 ? true : false);
-  unsigned long start_ms = millis();
-  while (runForever || (millis() - start_ms < timeout_ms)) {
-    color1 = color2;
-    stepVal1 = stepVal2;
-    for (uint16_t i = 0; i < pStrand->numPixels; i++) {
-      pStrand->pixels[i] = pixelFromRGB(color1.r/color_div, color1.g/color_div, color1.b/color_div);
-      if (i == 1) {
-        color2 = color1;
-        stepVal2 = stepVal1;
-      }
-      switch (stepVal1) {
-        case 0:
-        color1.g += anim_step;
-        if (color1.g >= anim_max)
-          stepVal1++;
-        break;
-        case 1:
-        color1.r -= anim_step;
-        if (color1.r == 0)
-          stepVal1++;
-        break;
-        case 2:
-        color1.b += anim_step;
-        if (color1.b >= anim_max)
-          stepVal1++;
-        break;
-        case 3:
-        color1.g -= anim_step;
-        if (color1.g == 0)
-          stepVal1++;
-        break;
-        case 4:
-        color1.r += anim_step;
-        if (color1.r >= anim_max)
-          stepVal1++;
-        break;
-        case 5:
-        color1.b -= anim_step;
-        if (color1.b == 0)
-          stepVal1 = 0;
-        break;
-      }
-    }
-    digitalLeds_updatePixels(pStrand);
-    delay(delay_ms);
-  }
-  digitalLeds_resetPixels(pStrand);
-}
-
 esp_err_t _http_event_handle(esp_http_client_event_t *evt)
 {
     switch(evt->event_id) {
@@ -200,23 +124,17 @@ static void http_get_task(void *pvParameters)
         ESP_LOGI(TAG, "Starting again!");
     }
 }
-void led_task(void *pvParameters)
+
+void setLEDBasedOnTemp(pixel* p, float temp)
 {
-  gpio_set_direction(GPIO_NUM_15, GPIO_MODE_OUTPUT);
-  gpio_set_level(GPIO_NUM_15, LOW);
-  if (digitalLeds_initStrands(STRANDS, STRANDCNT)) {
-    ets_printf("Init FAILURE: halting\n");
-    while (true) {};
-  }
-  while (true) {
-    for (int i = 0; i < STRANDCNT; i++) {
-      strand_t * pStrand = &STRANDS[i];
-      rainbow(pStrand, 0, 2000);
-      digitalLeds_resetPixels(pStrand);
-    }
+  if(temp < 15) {
+    p->blue = 255;
+  } else if(temp < 20) {
+    p->green = 255;
+  } else {
+    p->red = 255;
   }
 }
-
 void app_main()
 {
     ESP_ERROR_CHECK( nvs_flash_init() );
@@ -229,7 +147,25 @@ void app_main()
     ESP_ERROR_CHECK(wifi_connect());
 
     xTaskCreate(&http_get_task, "http_get_task", 4096, NULL, 5, NULL);
-    xTaskCreate(&led_task, "led_task", 4096, NULL, 10, NULL);
+    rmt_init(0, 15);
+    //static HSVpixel rainbow16[] = {{0.0f,1.0f,0.2f},{15.0f,1.0f,0.2f},{30.0f,1.0f,0.2f},{37.5f,1.0f,0.2f},{45.0f,1.0f,0.2f},
+    //  {60.0f,1.0f,0.2f},{75.0f,1.0f,0.2f}, {90.0f,1.0f,0.2f},{120.0f,1.0f,0.2f},
+    //  {150.0f,1.0f,0.0f},{180.0f,1.0f,0.0f},{210.0f,1.0f,0.0f},{240.0f,1.0f,0.0f},
+    //  {270.0f,1.0f,0.0f},{300.0f,1.0f,0.0f},{330.0f,1.0f,0.0f},};
+    //pixel pixels[16];
+    //for(int i=0; i<16; ++i) {
+    //    HSVtoRGB(&rainbow16[i], &pixels[i]);
+    //}
+    //rmt_write_sample(0, pixels, 16*3, false);
+
+    pixel pixels[55];
+    for(int i=0; i<55; ++i) {
+      pixels[i].red = 0;
+      pixels[i].green = 0;
+      pixels[i].blue = 0;
+    };
+    rmt_write_sample(0, pixels, 55*3, false);
+
 
     char buf[64];
     while(1) {
@@ -244,19 +180,23 @@ void app_main()
                 printf("weather, dt/sunrise/sunset is not number");
                 continue;
             }
+            //TODO: double probably not big enough for 32 bit number
             time_t now_time = (int)now_j->valuedouble;
             time_t sunrise_time = (int)sunrise_j->valuedouble;
             time_t sunset_time = (int)sunset_j->valuedouble;
-            const struct tm* now = localtime(&now_time);
-            const struct tm* sunrise = localtime(&sunrise_time);
-            const struct tm* sunset = localtime(&sunset_time);
+            const struct tm sunset;
+            const struct tm now;
+            const struct tm sunrise;
+            localtime_r(&now_time, &now);
+            localtime_r(&sunrise_time, &sunrise);
+            localtime_r(&sunset_time, &sunset);
+            printf("now tm struct %d-%d-%d %d:%d:%d -400\n", now.tm_year+1900, now.tm_mon+1, now.tm_mday, now.tm_hour, now.tm_min, now.tm_sec);
+            printf("sunrise tm struct %d-%d-%d %d:%d:%d -400\n", sunrise.tm_year+1900, sunrise.tm_mon+1, sunrise.tm_mday, sunrise.tm_hour, sunrise.tm_min, sunrise.tm_sec);
+            printf("sunset tm struct %d-%d-%d %d:%d:%d -400\n", sunset.tm_year+1900, sunset.tm_mon+1, sunset.tm_mday, sunset.tm_hour, sunset.tm_min, sunset.tm_sec);
 
-            strftime(buf, sizeof(buf), "%F %H:%M:%S %z", now);
-            printf("time is %ld %s\n", now_time, buf);
-            strftime(buf, sizeof(buf), "%F %H:%M:%S %z", sunrise);
-            printf("sunrise is %ld %s\n", sunrise_time, buf);
-            strftime(buf, sizeof(buf), "%F %H:%M:%S %z", sunset);
-            printf("sunset is %ld %s\n", sunset_time, buf);
+            printf("now fuckery %d %d %d %d \n", now.tm_hour*60*60, now.tm_min*60, now.tm_sec, now.tm_hour*60*60 + now.tm_min*60 + now.tm_sec);
+            printf("sunrise fuckery %d %d %d %d \n", sunrise.tm_hour*60*60, sunrise.tm_min*60, sunrise.tm_sec, sunrise.tm_hour*60*60 + sunrise.tm_min*60 + sunrise.tm_sec);
+            printf("sunset fuckery %d %d %d %d \n", sunset.tm_hour*60*60, sunset.tm_min*60, sunset.tm_sec, sunset.tm_hour*60*60 + sunset.tm_min*60 + sunset.tm_sec);
 
             cJSON* current = cJSON_GetObjectItemCaseSensitive(weather, "main");
             cJSON* temp = cJSON_GetObjectItemCaseSensitive(current, "temp");
@@ -272,6 +212,36 @@ void app_main()
             printf("temp: %.1f [%.1f - %.1f], %.2f%% humidity\n", temp->valuedouble, temp_min->valuedouble, temp_max->valuedouble, humidity->valuedouble);
             //got weather, time is +808927389-540028987-808466992 807416096:544104778:544565332 GM
             //    temp: 19.1 [16.1 - 21.0], 20.00% humidity
+
+            //clear pixels
+            for(int i=0; i<55; ++i) {
+              pixels[i].red = 0;
+              pixels[i].green = 0;
+              pixels[i].blue = 0;
+            };
+            //pixel 0 = 0:00, pixel 1 = 0:30, pixel 58 == 00:00 next day
+            //pixel 0 is 0, pixel 58 is 86400
+            //pixel 1 is 1800
+            int nowSeconds = now.tm_hour*60*60 + now.tm_min*60 + now.tm_sec;
+            int nowPixel = nowSeconds/60/30+1;
+
+            int sunriseSeconds = sunrise.tm_hour*60*60 + sunrise.tm_min*60 + sunrise.tm_sec;
+            int sunrisePixel = sunriseSeconds/60/30+1;
+
+            int sunsetSeconds = sunset.tm_hour*60*60 + sunset.tm_min*60 + sunset.tm_sec;
+            int sunsetPixel = sunsetSeconds/60/30+1;
+
+            printf("sunrise: %d sunset: %d now: %d\n", sunriseSeconds, sunsetSeconds, nowSeconds);
+            printf("sunrise: %d sunset: %d now: %d\n", sunrisePixel, sunsetPixel, nowPixel);
+            pixels[sunrisePixel].red = 255;
+            pixels[sunsetPixel].blue = 255;
+            pixels[nowPixel].green = 255;
+
+            setLEDBasedOnTemp(&pixels[49], temp_min->valuedouble);
+            setLEDBasedOnTemp(&pixels[50], temp->valuedouble);
+            setLEDBasedOnTemp(&pixels[51], temp_max->valuedouble);
+
+            rmt_write_sample(0, pixels, 55*3, false);
         }
         vTaskDelay(1);
     }
