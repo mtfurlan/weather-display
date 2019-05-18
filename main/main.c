@@ -27,15 +27,13 @@
 #include <cJSON.h>
 
 #include "driver/rmt.h"
-#include "LEDs.h"
-#include "analysis.h"
-#include "../components/inaudible_led/include/types.h"
+#include "inaudible_led.h"
 
 // defines OWP_API_KEY
 #include "secret.h"
 #include "wifi.h"
 
-#define WEATHER_API_URL "https://openweathermap.org/data/2.5/weather?id=5007804&appid=" OWP_API_KEY
+#define WEATHER_API_URL "https://api.darksky.net/forecast/"DARKSKY_API_KEY"/"LAT","LNG"?exclude=minutely,alerts,flags&lang=en&units=si"
 
 #define TIMEZONE "EST+5EDT,M3.2.0/2,M11.1.0/2"
 
@@ -125,14 +123,14 @@ static void http_get_task(void *pvParameters)
     }
 }
 
-void setLEDBasedOnTemp(pixel* p, float temp)
+void setLEDBasedOnTemp(pixel_t* p, float temp)
 {
   if(temp < 15) {
-    p->blue = 255;
+    p->blue = 55;
   } else if(temp < 20) {
-    p->green = 255;
+    p->green = 55;
   } else {
-    p->red = 255;
+    p->red = 55;
   }
 }
 void app_main()
@@ -147,27 +145,26 @@ void app_main()
     ESP_ERROR_CHECK(wifi_connect());
 
     xTaskCreate(&http_get_task, "http_get_task", 4096, NULL, 5, NULL);
-    rmt_init(0, 15);
+    led_init(0, 15);
     //static HSVpixel rainbow16[] = {{0.0f,1.0f,0.2f},{15.0f,1.0f,0.2f},{30.0f,1.0f,0.2f},{37.5f,1.0f,0.2f},{45.0f,1.0f,0.2f},
     //  {60.0f,1.0f,0.2f},{75.0f,1.0f,0.2f}, {90.0f,1.0f,0.2f},{120.0f,1.0f,0.2f},
     //  {150.0f,1.0f,0.0f},{180.0f,1.0f,0.0f},{210.0f,1.0f,0.0f},{240.0f,1.0f,0.0f},
     //  {270.0f,1.0f,0.0f},{300.0f,1.0f,0.0f},{330.0f,1.0f,0.0f},};
-    //pixel pixels[16];
+    //pixel_t pixels[16];
     //for(int i=0; i<16; ++i) {
     //    HSVtoRGB(&rainbow16[i], &pixels[i]);
     //}
-    //rmt_write_sample(0, pixels, 16*3, false);
+    //led_write(0, pixels, 16);
 
-    pixel pixels[55];
+    pixel_t pixels[55];
     for(int i=0; i<55; ++i) {
       pixels[i].red = 0;
       pixels[i].green = 0;
       pixels[i].blue = 0;
     };
-    rmt_write_sample(0, pixels, 55*3, false);
+    led_write(0, pixels, 55);
 
 
-    char buf[64];
     while(1) {
         if(weather_ready && !weather_parsed) {
             weather_parsed = true;
@@ -184,9 +181,9 @@ void app_main()
             time_t now_time = (int)now_j->valuedouble;
             time_t sunrise_time = (int)sunrise_j->valuedouble;
             time_t sunset_time = (int)sunset_j->valuedouble;
-            const struct tm sunset;
-            const struct tm now;
-            const struct tm sunrise;
+            struct tm sunset;
+            struct tm now;
+            struct tm sunrise;
             localtime_r(&now_time, &now);
             localtime_r(&sunrise_time, &sunrise);
             localtime_r(&sunset_time, &sunset);
@@ -233,15 +230,15 @@ void app_main()
 
             printf("sunrise: %d sunset: %d now: %d\n", sunriseSeconds, sunsetSeconds, nowSeconds);
             printf("sunrise: %d sunset: %d now: %d\n", sunrisePixel, sunsetPixel, nowPixel);
-            pixels[sunrisePixel].red = 255;
-            pixels[sunsetPixel].blue = 255;
-            pixels[nowPixel].green = 255;
+            pixels[sunrisePixel].red = 55;
+            pixels[sunsetPixel].blue = 55;
+            pixels[nowPixel].green = 55;
 
             setLEDBasedOnTemp(&pixels[49], temp_min->valuedouble);
             setLEDBasedOnTemp(&pixels[50], temp->valuedouble);
             setLEDBasedOnTemp(&pixels[51], temp_max->valuedouble);
 
-            rmt_write_sample(0, pixels, 55*3, false);
+            led_write(0, pixels, 55);
         }
         vTaskDelay(1);
     }
