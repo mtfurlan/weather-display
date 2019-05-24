@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "parseWeather.h"
+#include "colour.h"
 
 int main(void)
 {
@@ -33,6 +34,10 @@ int main(void)
         //printf("%04d-%02d-%02d %02d:%02d:%02d -400 %f %c\n", weather.hourly[i].time.tm_year+1900, weather.hourly[i].time.tm_mon+1, weather.hourly[i].time.tm_mday, weather.hourly[i].time.tm_hour, weather.hourly[i].time.tm_min, weather.hourly[i].time.tm_sec, weather.hourly[i].temp, sun);
     }
     printf("\n");
+
+    colour_t red = {{53.2328817858425, 104.575518439936, 40.0001579064637}};
+    pixel_t pixel =  lch2rgb(red);
+    printf("%d, %d, %d\n", pixel.red, pixel.green, pixel.blue);
 
     return 0;
 }
