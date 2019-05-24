@@ -38,9 +38,34 @@
 
 #define TIMEZONE "EST+5EDT,M3.2.0/2,M11.1.0/2"
 
+
+//kinda red to blue
+//Black body radiation
+//Taken from https://github.com/abzman/photo-transmission-suit/blob/master/redbull/redbull.ino
+int armsR[] = {255,255,255,255,255,255,255,255,255,255,255,255,192,160,128,128,224,192,160,128,128,128,255,224,192,160,128,96, 80, 64, 64, 64 };
+int armsG[] = {0,  0,  0,  0,  16, 32, 48, 64, 80, 96, 112,128,128,128,128,128,128,128,128,128,128,128,255,224,192,160,128,96, 80, 64, 64, 64 };
+int armsB[] = {0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  64, 128,255,255,255,255,255,255,255,255,255,255};
+pixel_t colourMap(double temp)
+{
+    if(temp < 12) {
+        temp = 12;
+    }
+    if(temp > 21) {
+        temp = 21;
+    }
+    int i = 32-(temp-12)/(21-12)*32;
+
+    pixel_t fuck;
+    fuck.red = armsR[(int)i]/2;
+    fuck.green = armsG[(int)i]/2;
+    fuck.blue = armsB[(int)i]/2;
+
+    //return (pixel_t){{, armsG[(int)temp]/2, armsB[(int)temp]/2}};
+    return fuck;
+}
 static const char *TAG = "example";
 
-#define WEATHER_JSON_BUFFLEN 1024
+#define WEATHER_JSON_BUFFLEN 25*1024
 char weather_json[WEATHER_JSON_BUFFLEN];
 int weather_json_index = 0;
 bool weather_ready = false;
@@ -174,12 +199,16 @@ void app_main()
 
             parseWeather(weather_cjson, &weather);
 
-            ////clear pixels
-            //for(int i=0; i<55; ++i) {
-            //  pixels[i].red = 0;
-            //  pixels[i].green = 0;
-            //  pixels[i].blue = 0;
-            //};
+            //clear pixels
+            for(int i=0; i<24; ++i) {
+                pixels[i] = colourMap(weather.hourly[i].temp);
+                printf("%f: %d %d %d\n", weather.hourly[i].temp, pixels[i].red, pixels[i].green, pixels[i].blue);
+            }
+            for(int i=0; i<32; ++i) {
+                pixels[i+28].red = (int)armsR[i]/2;
+                pixels[i+28].green = (int)armsG[i]/2;
+                pixels[i+28].blue = (int)armsB[i]/2;
+            }
             ////pixel 0 = 0:00, pixel 1 = 0:30, pixel 58 == 00:00 next day
             ////pixel 0 is 0, pixel 58 is 86400
             ////pixel 1 is 1800
@@ -202,7 +231,7 @@ void app_main()
             //setLEDBasedOnTemp(&pixels[50], temp->valuedouble);
             //setLEDBasedOnTemp(&pixels[51], temp_max->valuedouble);
 
-            //led_write(0, pixels, 55);
+            led_write(0, pixels, 55);
         }
         vTaskDelay(1);
     }

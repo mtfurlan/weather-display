@@ -35,7 +35,9 @@ int main(void)
     }
     printf("\n");
 
-    colour_t red = {{53.2328817858425, 104.575518439936, 40.0001579064637}};
+
+
+    colour_t red = {{41.6567159358981, 87.0898452442239, 40.0001579064637}};
     pixel_t pixel =  lch2rgb(red);
     printf("%d, %d, %d\n", pixel.red, pixel.green, pixel.blue);
 
