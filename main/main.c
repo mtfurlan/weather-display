@@ -29,6 +29,7 @@
 #include "driver/rmt.h"
 #include "inaudible_led.h"
 #include "parseWeather.h"
+#include "yy_color_converter.h"
 
 // defines OWP_API_KEY
 #include "secret.h"
@@ -159,6 +160,108 @@ void setLEDBasedOnTemp(pixel_t* p, float temp)
     p->red = 55;
   }
 }
+
+pixel_t lchToRGB(double l, double c, double h)
+{
+    CGFloat L, a, b;
+    CGFloat X, Y, Z;
+    CGFloat R, G, B;
+    CIELCHab2CIELab(l, c, h, &L, &a, &b);
+    CIELab2CIEXYZ(yy_illuminant_D50,
+                   L, a, b,
+                   &X, &Y, &Z);
+    CIEXYZ2RGB(yy_illuminant_D50, yy_gamma_1_0,
+                yy_rgbspace_sRGB, yy_adaption_NONE,
+                X, Y, Z,
+                &R, &G, &B);
+    printf("LCH: %f, %f, %f\n", l, c, h);
+    printf("RGB: %f, %f, %f\n", R, G, B);
+    pixel_t ret = {(uint8_t)R, (uint8_t)G, (uint8_t)B};
+    return ret;
+
+}
+
+int lineIntersection(
+double Ax, double Ay,
+double Bx, double By,
+double Cx, double Cy,
+double Dx, double Dy,
+double *X, double *Y) {
+
+  double  distAB, theCos, theSin, newX, ABpos ;
+
+  //  Fail if either line is undefined.
+  if ((Ax==Bx && Ay==By) || (Cx==Dx && Cy==Dy)) return 1;
+
+  //  (1) Translate the system so that point A is on the origin.
+  Bx-=Ax; By-=Ay;
+  Cx-=Ax; Cy-=Ay;
+  Dx-=Ax; Dy-=Ay;
+
+  //  Discover the length of segment A-B.
+  distAB=sqrt(Bx*Bx+By*By);
+
+  //  (2) Rotate the system so that point B is on the positive X axis.
+  theCos=Bx/distAB;
+  theSin=By/distAB;
+  newX=Cx*theCos+Cy*theSin;
+  Cy  =Cy*theCos-Cx*theSin; Cx=newX;
+  newX=Dx*theCos+Dy*theSin;
+  Dy  =Dy*theCos-Dx*theSin; Dx=newX;
+
+  //  Fail if the lines are parallel.
+  if (Cy==Dy) return 1;
+
+  //  (3) Discover the position of the intersection point along line A-B.
+  ABpos=Dx+(Cx-Dx)*Dy/(Dy-Cy);
+
+  //  (4) Apply the discovered position to line A-B in the original coordinate system.
+  *X=Ax+ABpos*theCos;
+  *Y=Ay+ABpos*theSin;
+
+  //  Success.
+  return 0;
+}
+double lineIntercept(double h, double a1, double r1, double a2, double r2)
+{
+    double x1 = r1* cos(a1);
+    double y1 = r1* sin(a1);
+    double x2 = r2* cos(a2);
+    double y2 = r2* sin(a2);
+
+    double x3 = 500* cos(h);
+    double y3 = 500* sin(h);
+
+    double X, Y;
+
+    lineIntersection(x1, x2, y1, y2, 0, 0, x3, y3, &X, &Y);
+
+    return sqrt(pow(X, 2) + pow(Y, 2));
+
+}
+double maxChromaForHue(double h)
+{
+    //triangle
+    //red  : 36.31, 159.87
+    double redA = 36.314239;
+    double redD = 159.870807;
+    //green: 138.56 204.76
+    double greenA = 138.564686;
+    double greenD = 204.756793;
+    //blue : 304.441 162.86
+    double blueA = 304.441534;
+    double blueD = 162.864741;
+    if(h < redA && h+360 > blueA) {
+        return lineIntercept(h, redA, redD, blueA, blueD);
+    }
+    if(h > redA && h < greenA) {
+        return lineIntercept(h, redA, redD, greenA, greenD);
+    }
+    if(h > greenA && h < blueA) {
+        return lineIntercept(h, blueA, blueD, greenA, greenD);
+    }
+    else return 0;
+}
 void app_main()
 {
     ESP_ERROR_CHECK( nvs_flash_init() );
@@ -168,10 +271,20 @@ void app_main()
     setenv("TZ", TIMEZONE, 1);
     tzset();
 
-    ESP_ERROR_CHECK(wifi_connect());
-
-    xTaskCreate(&http_get_task, "http_get_task", 4096, NULL, 5, NULL);
     led_init(0, 15);
+
+    pixel_t pixels[288];
+    for(int i=0; i<288; ++i) {
+
+      //pixels[i] = lchToRGB(70, 5, i*2.5);
+      pixels[i] = lchToRGB(200, maxChromaForHue(i*1.25), i*1.25);
+      printf("%d, %d, %d\n", pixels[i].red, pixels[i].green, pixels[i].blue);
+    };
+    led_write(0, pixels, 288);
+
+    //ESP_ERROR_CHECK(wifi_connect());
+
+    //xTaskCreate(&http_get_task, "http_get_task", 4096, NULL, 5, NULL);
     //static HSVpixel rainbow16[] = {{0.0f,1.0f,0.2f},{15.0f,1.0f,0.2f},{30.0f,1.0f,0.2f},{37.5f,1.0f,0.2f},{45.0f,1.0f,0.2f},
     //  {60.0f,1.0f,0.2f},{75.0f,1.0f,0.2f}, {90.0f,1.0f,0.2f},{120.0f,1.0f,0.2f},
     //  {150.0f,1.0f,0.0f},{180.0f,1.0f,0.0f},{210.0f,1.0f,0.0f},{240.0f,1.0f,0.0f},
@@ -182,17 +295,11 @@ void app_main()
     //}
     //led_write(0, pixels, 16);
 
-    pixel_t pixels[55];
-    for(int i=0; i<55; ++i) {
-      pixels[i].red = 0;
-      pixels[i].green = 0;
-      pixels[i].blue = 0;
-    };
-    led_write(0, pixels, 55);
-
 
     weather_t weather;
     while(1) {
+        vTaskDelay(1);
+        continue;
         if(weather_ready && !weather_parsed) {
             weather_parsed = true;
 
@@ -233,6 +340,5 @@ void app_main()
 
             led_write(0, pixels, 55);
         }
-        vTaskDelay(1);
     }
 }
